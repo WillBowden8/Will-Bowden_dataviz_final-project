@@ -1,0 +1,461 @@
+---
+title: "Data Visualization for Exploratory Data Analysis"
+author: "Will Bowden — wbowden@floridapoly.edu"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    keep_md: true
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  message = FALSE,
+  warning = FALSE,
+  fig.width  = 9,
+  fig.height = 5.5,
+  fig.align  = "center"
+)
+```
+
+```{r libraries}
+library(tidyverse)
+library(lubridate)
+library(ggridges)
+library(plotly)
+```
+
+---
+
+# Data Visualization Project 03
+
+In this project I explore two datasets: Tampa International Airport (TPA) weather data from 2022 for distribution visualization exercises, and a concrete compressive strength dataset for a multi-part exploratory analysis. The project also includes an interactive chart, colorblind-safe accessibility measures, and a before/after chart redesign.
+
+---
+
+## PART 1: Density Plots — TPA Weather Data (2022)
+
+```{r load-weather}
+weather_tpa <- read_csv(
+  "https://raw.githubusercontent.com/aalhamadani/datasets/master/tpa_weather_2022.csv",
+  col_types = cols()
+)
+
+# random sample to inspect structure
+sample_n(weather_tpa, 4)
+```
+
+```{r wrangle-weather}
+# Convert numeric month to full month name, ordered Jan–Dec
+weather_tpa <- weather_tpa |>
+  mutate(
+    month_name = factor(
+      month.name[month],
+      levels = month.name
+    )
+  )
+```
+
+---
+
+### (a) Faceted Histogram of Maximum Temperatures by Month
+
+```{r tpa-histogram, fig.alt="Twelve small histograms, one per calendar month, showing the distribution of daily maximum temperatures at Tampa International Airport in 2022. Each histogram uses a blue fill. Summer months (June through September) show distributions centered around 90 to 95 degrees Fahrenheit, while winter months show lower centers around 65 to 75 degrees."}
+ggplot(weather_tpa, aes(x = max_temp)) +
+  geom_histogram(binwidth = 3, fill = "#0072B2", color = "white", linewidth = 0.3) +
+  facet_wrap(~month_name, ncol = 4) +
+  labs(
+    title    = "Distribution of Daily Maximum Temperatures by Month",
+    subtitle = "Tampa International Airport, 2022",
+    x        = "Maximum Temperature (°F)",
+    y        = "Count",
+    caption  = "Source: FSU Florida Climate Center · tpa_weather_2022.csv"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+---
+
+### (b) Overall Density Plot of Maximum Temperatures
+
+```{r tpa-density, fig.alt="A single smooth density curve of daily maximum temperatures at Tampa International Airport in 2022, using a rectangular kernel with bandwidth 0.5. The distribution is roughly bimodal, with a smaller peak near 70 degrees Fahrenheit in winter and a larger peak near 90 degrees in summer."}
+ggplot(weather_tpa, aes(x = max_temp)) +
+  geom_density(kernel = "rectangular", bw = 0.5,
+               fill = "#0072B2", alpha = 0.4, color = "#0072B2", linewidth = 0.8) +
+  labs(
+    title    = "Density of Daily Maximum Temperatures",
+    subtitle = "Tampa International Airport, 2022  (rectangular kernel, bw = 0.5)",
+    x        = "Maximum Temperature (°F)",
+    y        = "Density",
+    caption  = "Source: FSU Florida Climate Center"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank())
+```
+
+---
+
+### (c) Faceted Density Plots by Month
+
+```{r tpa-density-facet, fig.alt="Twelve small density plots, one per calendar month, showing the smoothed distribution of daily maximum temperatures at Tampa International Airport in 2022. Summer months are concentrated in the high 80s and low 90s; winter months show wider, lower distributions around 60 to 75 degrees."}
+ggplot(weather_tpa, aes(x = max_temp, fill = month_name)) +
+  geom_density(alpha = 0.7, color = NA) +
+  facet_wrap(~month_name, ncol = 4) +
+  scale_fill_viridis_d(option = "turbo", guide = "none") +
+  labs(
+    title    = "Density of Daily Maximum Temperatures by Month",
+    subtitle = "Tampa International Airport, 2022",
+    x        = "Maximum Temperature (°F)",
+    y        = "Density",
+    caption  = "Source: FSU Florida Climate Center"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    strip.text       = element_text(face = "bold"),
+    panel.grid.minor = element_blank()
+  )
+```
+
+---
+
+### (d) Ridge Density Plot with Quantile Lines — Plasma Palette
+
+```{r tpa-ridges, fig.height=8, fig.alt="Horizontal ridge density plot showing the distribution of daily maximum temperatures at Tampa International Airport in 2022, one ridge per month ordered January through December from top to bottom. Each ridge is filled using the viridis plasma palette (dark purple at the bottom for winter, bright yellow at the top for summer). Vertical dotted lines inside each ridge mark the 25th, 50th, and 75th percentiles."}
+ggplot(weather_tpa, aes(x = max_temp, y = fct_rev(month_name), fill = stat(x))) +
+  geom_density_ridges_gradient(
+    quantile_lines = TRUE,
+    quantiles      = c(0.25, 0.5, 0.75),
+    scale          = 0.9,
+    color          = "white",
+    linewidth      = 0.4
+  ) +
+  scale_fill_viridis_c(option = "plasma", name = "Max Temp (°F)") +
+  labs(
+    title    = "Distribution of Daily Maximum Temperatures by Month",
+    subtitle = "Tampa International Airport, 2022\nDotted lines mark 25th, 50th, and 75th percentiles",
+    x        = "Maximum Temperature (°F)",
+    y        = NULL,
+    caption  = "Source: FSU Florida Climate Center"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    panel.grid.minor = element_blank(),
+    legend.position  = "right"
+  )
+```
+
+---
+
+### (e) Precipitation Distribution — Custom Visualization
+
+Values of −99.99 represent missing precipitation data and are excluded.
+
+```{r tpa-precip, fig.alt="Histogram of daily precipitation at Tampa International Airport in 2022, with a log-transformed x-axis. The vast majority of days record zero or near-zero precipitation. A small number of days see heavy rainfall above one inch. The bars are colored using a viridis gradient mapped to precipitation amount, from dark purple for low values to bright yellow for high values."}
+precip_clean <- weather_tpa |>
+  filter(precipitation > -99) |>
+  # treat trace precipitation (0) separately by adding a small offset for log scale
+  mutate(precip_plot = if_else(precipitation == 0, 0.001, precipitation))
+
+# Proportion of dry days
+dry_pct <- round(mean(weather_tpa$precipitation[weather_tpa$precipitation > -99] == 0) * 100)
+
+ggplot(precip_clean, aes(x = precip_plot, fill = after_stat(x))) +
+  geom_histogram(bins = 35, color = "white", linewidth = 0.2) +
+  scale_x_log10(
+    breaks = c(0.001, 0.01, 0.1, 0.5, 1, 2, 4),
+    labels = c("0", "0.01", "0.1", "0.5", "1", "2", "4")
+  ) +
+  scale_fill_viridis_c(option = "viridis", guide = "none") +
+  annotate(
+    "text", x = 0.001, y = Inf,
+    label = paste0(dry_pct, "% of days\nhad no rain"),
+    hjust = 0, vjust = 1.3, size = 3.8, color = "gray30"
+  ) +
+  labs(
+    title    = "Daily Precipitation at Tampa International Airport, 2022",
+    subtitle = "Log-scaled x-axis; leftmost bar represents zero-precipitation days",
+    x        = "Precipitation (inches, log scale)",
+    y        = "Number of Days",
+    caption  = "Source: FSU Florida Climate Center · Missing values (−99.99) excluded"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank())
+```
+
+**Takeaway:** Tampa's precipitation is highly skewed — the majority of days are completely dry, with intense rainfall concentrated in a small number of events. The log scale is necessary to reveal structure across such a wide range of values. Summer convective storms account for most of the high-precipitation days.
+
+---
+
+## PART 2: Data on Concrete Strength
+
+Concrete is the most important material in **civil engineering**. Concrete compressive strength is a highly nonlinear function of age and ingredients. The dataset is from the [UCI Machine Learning Repository](https://archive.ics.uci.edu/ml/index.php) and contains 1,030 observations with 8 input variables and 1 output variable.
+
+| Variable | Notes |
+|---|---|
+| Cement | kg in a m³ mixture |
+| Blast Furnace Slag | kg in a m³ mixture |
+| Fly Ash | kg in a m³ mixture |
+| Water | kg in a m³ mixture |
+| Superplasticizer | kg in a m³ mixture |
+| Coarse Aggregate | kg in a m³ mixture |
+| Fine Aggregate | kg in a m³ mixture |
+| Age | in days |
+| Concrete compressive strength | MPa (megapascals) |
+
+```{r load-concrete}
+concrete <- read_csv("../data/concrete.csv", col_types = cols())
+glimpse(concrete)
+```
+
+```{r create-strength-range}
+new_concrete <- concrete |>
+  mutate(
+    strength_range = cut(
+      Concrete_compressive_strength,
+      breaks = quantile(Concrete_compressive_strength, probs = seq(0, 1, 0.2))
+    )
+  )
+```
+
+---
+
+### Task 1 — Distribution of Continuous Variables
+
+#### Compressive Strength
+
+```{r concrete-dist-strength, fig.alt="Histogram of concrete compressive strength with a smoothed density curve overlaid. The distribution is roughly right-skewed, with a peak near 25 to 35 megapascals and a tail extending toward 80 megapascals. Vertical dashed lines mark the mean and median."}
+strength_stats <- concrete |>
+  summarise(mean_s = mean(Concrete_compressive_strength),
+            med_s  = median(Concrete_compressive_strength))
+
+ggplot(concrete, aes(x = Concrete_compressive_strength)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 35,
+    fill = "#0072B2", color = "white", linewidth = 0.2, alpha = 0.7
+  ) +
+  geom_density(color = "#E69F00", linewidth = 1) +
+  geom_vline(aes(xintercept = strength_stats$mean_s),
+             color = "#D55E00", linetype = "dashed", linewidth = 0.9) +
+  geom_vline(aes(xintercept = strength_stats$med_s),
+             color = "#009E73", linetype = "dotdash", linewidth = 0.9) +
+  annotate("text", x = strength_stats$mean_s + 2, y = 0.028,
+           label = paste0("Mean\n", round(strength_stats$mean_s, 1), " MPa"),
+           color = "#D55E00", size = 3.2, hjust = 0) +
+  annotate("text", x = strength_stats$med_s - 2, y = 0.028,
+           label = paste0("Median\n", round(strength_stats$med_s, 1), " MPa"),
+           color = "#009E73", size = 3.2, hjust = 1) +
+  labs(
+    title    = "Distribution of Concrete Compressive Strength",
+    subtitle = "1,030 observations from UCI Machine Learning Repository",
+    x        = "Compressive Strength (MPa)",
+    y        = "Density",
+    caption  = "Source: UCI ML Repository · concrete.csv"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank())
+```
+
+#### Water Content
+
+```{r concrete-dist-water, fig.alt="Histogram of water content in concrete mixtures. The distribution is roughly bell-shaped and centered near 185 kilograms per cubic meter, with a range from about 120 to 250 kilograms per cubic meter."}
+ggplot(concrete, aes(x = Water)) +
+  geom_histogram(
+    aes(y = after_stat(density)),
+    bins = 30,
+    fill = "#56B4E9", color = "white", linewidth = 0.2, alpha = 0.8
+  ) +
+  geom_density(color = "#0072B2", linewidth = 1) +
+  labs(
+    title    = "Distribution of Water Content in Concrete Mixtures",
+    subtitle = "Water is a critical driver of workability vs. strength trade-off",
+    x        = "Water (kg / m³)",
+    y        = "Density",
+    caption  = "Source: UCI ML Repository · concrete.csv"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank())
+```
+
+**Commentary:** Compressive strength ranges from ~3 MPa to ~82 MPa — a 27-fold span — and is right-skewed, with a mean (~36 MPa) higher than the median (~34 MPa). This range is realistic for structural concrete applications, which typically target 20–50 MPa. Water content is more symmetric, centered near 185 kg/m³, with a sensible range of roughly 120–250 kg/m³. Higher water-to-cement ratios generally reduce compressive strength, which sets up the relationship we explore next.
+
+---
+
+### Task 2 — Temporal Visualization Using Age
+
+```{r concrete-age-violin, fig.alt="Violin plot showing the distribution of concrete compressive strength by age group. Age is divided into five groups: 1 to 7 days, 8 to 28 days, 29 to 90 days, 91 to 180 days, and 181 plus days. The violins are filled using a viridis plasma gradient from dark purple for young concrete to bright yellow for old concrete. Compressive strength increases dramatically with age, particularly in the first 28 days."}
+new_concrete <- new_concrete |>
+  mutate(
+    age_group = cut(
+      Age,
+      breaks = c(0, 7, 28, 90, 180, Inf),
+      labels = c("1–7 days", "8–28 days", "29–90 days", "91–180 days", "181+ days")
+    )
+  )
+
+ggplot(new_concrete, aes(x = age_group, y = Concrete_compressive_strength,
+                         fill = age_group)) +
+  geom_violin(trim = FALSE, alpha = 0.85, color = "white", linewidth = 0.4) +
+  geom_boxplot(width = 0.08, fill = "white", outlier.size = 0.8,
+               outlier.alpha = 0.5, color = "gray40") +
+  scale_fill_viridis_d(option = "plasma", guide = "none") +
+  labs(
+    title    = "Concrete Compressive Strength by Curing Age",
+    subtitle = "Violins show full distribution; inner box plots mark quartiles and median",
+    x        = "Age at Testing",
+    y        = "Compressive Strength (MPa)",
+    caption  = "Source: UCI ML Repository · concrete.csv"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank())
+```
+
+**Commentary:** The most dramatic strength gains occur in the first 28 days, consistent with concrete's hydration chemistry — roughly 70–80% of 28-day strength is achieved in the first week. Beyond 90 days the median continues to rise but the gains become smaller. The violin shapes also reveal that older specimens have wider distributions, likely because the dataset includes a broader mix of formulations tested at later ages.
+
+---
+
+### Task 3 — Interactive Scatterplot: Cement vs. Compressive Strength
+
+> **Interactivity:** This plotly chart lets readers hover over individual data points to see exact ingredient values (cement, water, age), zoom into dense regions, and filter by strength quartile via the legend. A static scatterplot of 1,030 overlapping points would obscure the structure that becomes visible when exploring with hover and zoom.
+
+```{r concrete-scatter-interactive, fig.alt="Interactive scatter plot of cement content versus concrete compressive strength for 1030 observations. Points are colored by strength quartile using a viridis plasma palette. There is a positive trend between cement content and strength. Points are also sized by age in days, revealing that older specimens (larger points) tend to cluster toward higher strength at moderate cement levels."}
+# Build strength quantile groups for color
+concrete_plot <- concrete |>
+  mutate(
+    strength_q = cut(
+      Concrete_compressive_strength,
+      breaks = quantile(Concrete_compressive_strength, probs = seq(0, 1, 0.25)),
+      labels = c("Q1 (lowest)", "Q2", "Q3", "Q4 (highest)"),
+      include.lowest = TRUE
+    )
+  )
+
+p_conc <- ggplot(
+  concrete_plot,
+  aes(
+    x     = Cement,
+    y     = Concrete_compressive_strength,
+    color = strength_q,
+    size  = Age,
+    text  = paste0(
+      "Strength: ", round(Concrete_compressive_strength, 1), " MPa<br>",
+      "Cement: ",   round(Cement, 1), " kg/m³<br>",
+      "Water: ",    round(Water, 1), " kg/m³<br>",
+      "Age: ",      Age, " days<br>",
+      "Quartile: ", strength_q
+    )
+  )
+) +
+  geom_point(alpha = 0.65) +
+  scale_color_viridis_d(option = "plasma", name = "Strength Quartile") +
+  scale_size_continuous(range = c(1, 6), name = "Age (days)") +
+  labs(
+    title = "Cement Content vs. Compressive Strength",
+    x     = "Cement (kg / m³)",
+    y     = "Compressive Strength (MPa)",
+    caption = "Source: UCI ML Repository · concrete.csv"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank())
+
+ggplotly(p_conc, tooltip = "text") |>
+  layout(
+    title = list(
+      text = paste0(
+        "Cement Content vs. Compressive Strength",
+        "<br><sup>Hover for values · point size = age in days · color = strength quartile · click legend to filter</sup>"
+      )
+    ),
+    legend = list(orientation = "h", y = -0.2)
+  )
+```
+
+**Commentary:** There is a general positive relationship between cement content and compressive strength — mixtures with more cement tend to be stronger. However, the relationship is noisy, reflecting the nonlinear influence of water-cement ratio, supplementary cementitious materials (slag, fly ash), and curing age. Point size encodes age: larger (older) specimens are scattered across a wide strength range, while very young concrete (small points) clusters in the lower-strength region regardless of cement content.
+
+---
+
+## Redesign: Before & After
+
+### The "Bad" Chart — Pie Chart of NBA Championship Shares
+
+A pie chart is a classic example of a chart that makes comparison unnecessarily difficult. Below is a reproduction of how NBA championship shares (1980–2018) might be displayed as a pie chart.
+
+```{r bad-chart, fig.alt="A pie chart showing the share of NBA championships by team from 1980 to 2018. The chart uses a rainbow color palette. It is difficult to compare slice sizes for teams with similar championship counts, such as Bulls, Spurs, and Pistons. The chart would be described as visually cluttered and hard to read."}
+nba_raw <- read_csv("../data/NBAchampionsdata.csv", col_types = cols())
+
+nba_raw <- nba_raw |>
+  mutate(Team = str_trim(str_remove_all(Team, "'")),
+         Team = if_else(Team == "Warriorrs", "Warriors", Team))
+
+champs_pie <- nba_raw |>
+  distinct(Year, Team) |>
+  count(Team, name = "championships", sort = TRUE)
+
+# Bad chart: pie with rainbow palette
+pie(
+  champs_pie$championships,
+  labels  = paste0(champs_pie$Team, " (", champs_pie$championships, ")"),
+  col     = rainbow(nrow(champs_pie)),
+  main    = "NBA Championship Shares (1980–2018)"
+)
+```
+
+**What is wrong with this chart?**
+
+1. **Pie charts are hard to compare** — Human perception is poor at judging arc length and angle. It is nearly impossible to tell whether the Spurs (5) or Pistons (3) piece is larger without looking at the labels.
+2. **Rainbow palette is not colorblind-safe** — The rainbow scale cycles through colors that are indistinguishable under deuteranopia or protanopia.
+3. **No natural ordering** — The slices have no inherent sequence, so the viewer must search around the pie to find a team.
+4. **Overplotting of labels** — Some team labels overlap, especially for smaller slices.
+
+---
+
+### The Improved Chart — Horizontal Bar Chart
+
+```{r good-chart, fig.alt="Horizontal bar chart of NBA championships won by each team between 1980 and 2018, ordered from most to fewest. The Lakers lead with 10 championships, followed by the Bulls at 6 and the Spurs at 5. Bars are filled using the viridis plasma colorblind-safe palette, with darker colors for fewer championships and brighter yellows for more. Championship counts are labeled at the end of each bar."}
+ggplot(champs_pie, aes(x = championships, y = fct_reorder(Team, championships),
+                       fill = championships)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = championships), hjust = -0.3, size = 3.8, color = "gray20") +
+  scale_fill_viridis_c(option = "plasma", guide = "none") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(
+    title    = "NBA Championships by Franchise (1980–2018)",
+    subtitle = "Ranked from most to fewest; bars filled with viridis plasma palette",
+    x        = "Number of Championships",
+    y        = NULL,
+    caption  = "Source: NBAchampionsdata.csv"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(panel.grid.minor = element_blank(),
+        panel.grid.major.y = element_blank())
+```
+
+**How the redesign fixes the problems:**
+
+1. **Bar length is easy to compare** — Bar charts use a common baseline and linear length, which humans perceive accurately. The Lakers' dominance (10 titles) and the gap between the Bulls (6) and everyone else is immediately visible.
+2. **Colorblind-safe palette** — The viridis plasma gradient is perceptually uniform and distinguishable under common forms of colorblindness. Color is redundant here (position already encodes magnitude), so it provides visual polish without introducing ambiguity.
+3. **Ordered by value** — `fct_reorder()` ranks teams from most to fewest championships, so the chart reads as a ranking.
+4. **Direct labels** — Championship counts are placed at the end of each bar, eliminating any need to look up a legend or estimate from an axis.
+
+---
+
+## Summary
+
+This project explored two datasets using a range of visualization techniques:
+
+- **TPA weather data (2022):** Reproduced five distribution charts — faceted histograms, kernel density plots, and a ridge plot with quantile lines — demonstrating how the choice of geometry and bandwidth reveals different aspects of a temperature distribution. The precipitation visualization shows that log scaling is essential when data span several orders of magnitude.
+
+- **Concrete strength data:** Explored two continuous variables to confirm realistic data ranges, used violin + box plot combinations to show how compressive strength accumulates with curing age, and created an interactive scatter plot linking cement content to strength (colored and sized by quartile and age).
+
+- **Accessibility:** All figures use colorblind-safe palettes (Okabe-Ito, viridis/plasma) and include `fig.alt` alt text. Shape and position encode the primary comparisons, with color used for reinforcement rather than as the sole encoding channel.
+
+- **Redesign:** The pie chart → bar chart redesign illustrates how a bad chart can mislead through perception limits, unsafe palettes, and lack of ordering — and how a simple horizontal bar chart, properly ordered and labeled, corrects all of those problems simultaneously.
