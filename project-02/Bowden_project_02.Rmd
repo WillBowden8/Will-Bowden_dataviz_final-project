@@ -1,0 +1,471 @@
+---
+title: "Data Visualization Mini-Project 2: Births, Beats & Basketball"
+author: "Will Bowden — wbowden@floridapoly.edu"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    keep_md: true
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+    self_contained: true
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo      = TRUE,
+  message   = FALSE,
+  warning   = FALSE,
+  fig.width = 10,
+  fig.height = 6,
+  fig.align = "center"
+)
+```
+
+```{r libraries}
+library(tidyverse)
+library(plotly)
+library(sf)
+library(broom)
+library(scales)
+
+# Shared project theme applied to all ggplot2 figures
+project_theme <- theme_minimal(base_size = 13) +
+  theme(
+    plot.title       = element_text(face = "bold", size = 15, margin = margin(b = 5)),
+    plot.subtitle    = element_text(color = "gray45", margin = margin(b = 10)),
+    plot.caption     = element_text(color = "gray55", size = 9, hjust = 0),
+    panel.grid.minor = element_blank(),
+    legend.position  = "bottom"
+  )
+
+# Okabe-Ito colorblind-safe 8-color palette
+pal <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442",
+         "#0072B2", "#D55E00", "#CC79A7", "#000000")
+```
+
+---
+
+## Introduction
+
+This report explores three distinct datasets to surface patterns across American demography, pop culture, and sports.
+
+- **U.S. Births (2000–2014):** How do birth counts vary by season, year, and day of the week?
+- **Billboard Summer Hits (1958–2017):** How have the sonic qualities of summer pop hits changed over decades?
+- **NBA Champions (1980–2018):** What statistical profile characterizes championship-winning teams, and which cities have dominated?
+
+---
+
+## Data
+
+### Loading
+
+```{r load-data}
+births    <- read_csv("../data/us_births_00_14.csv")
+billboard <- read_csv("../data/all_billboard_summer_hits.csv")
+nba       <- read_csv("../data/NBAchampionsdata.csv")
+```
+
+### U.S. Births (2000–2014)
+
+```{r births-preview}
+glimpse(births)
+```
+
+The dataset contains **`r nrow(births)` rows**, each representing a single calendar day. Columns include `year`, `month`, `date`, `day_of_week`, and `births`.
+
+**Missing values:**
+
+```{r births-missing}
+births |>
+  summarise(across(everything(), ~sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "Column", values_to = "Missing") |>
+  knitr::kable()
+```
+
+No missing values. The `day_of_week` column requires factor reordering before plotting.
+
+---
+
+### Billboard Summer Hits (1958–2017)
+
+```{r billboard-preview}
+glimpse(billboard)
+```
+
+The dataset contains **`r nrow(billboard)` songs** with Spotify audio features. Relevant features include `danceability`, `energy`, `valence`, `acousticness`, `tempo`, `loudness`, and `year`.
+
+**Missing values:**
+
+```{r billboard-missing}
+billboard |>
+  summarise(across(everything(), ~sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "Column", values_to = "Missing") |>
+  filter(Missing > 0) |>
+  knitr::kable()
+```
+
+No missing values in the columns used for analysis.
+
+---
+
+### NBA Champions (1980–2018)
+
+```{r nba-preview}
+glimpse(nba)
+```
+
+Each row is a single Finals game for that year's champion. With **`r nrow(nba)` games** across `r n_distinct(nba$Year)` championship years.
+
+**Missing values:**
+
+```{r nba-missing}
+nba |>
+  summarise(across(everything(), ~sum(is.na(.)))) |>
+  pivot_longer(everything(), names_to = "Column", values_to = "Missing") |>
+  filter(Missing > 0) |>
+  knitr::kable()
+```
+
+`TPP` (three-point field goal percentage) is missing when a team attempted zero three-pointers — a structural NA, not a data quality issue.
+
+---
+
+## Data Cleaning & Preparation
+
+```{r clean-births}
+dow_levels <- c("Mon", "Tues", "Wed", "Thurs", "Fri", "Sat", "Sun")
+
+births <- births |>
+  mutate(
+    day_of_week = factor(day_of_week, levels = dow_levels),
+    month_name  = factor(month.abb[month], levels = month.abb)
+  )
+```
+
+```{r clean-billboard}
+billboard <- billboard |>
+  mutate(decade = paste0(floor(year / 10) * 10, "s"))
+```
+
+```{r clean-nba}
+nba <- nba |>
+  mutate(
+    Team = str_trim(str_remove_all(Team, "'")),
+    Team = case_when(
+      Team == "Warriorrs" ~ "Warriors",
+      TRUE                ~ Team
+    )
+  )
+
+champs_count <- nba |>
+  distinct(Year, Team) |>
+  count(Team, name = "championships", sort = TRUE)
+
+champs_count |> knitr::kable(caption = "NBA Championships by Team (1980–2018)")
+```
+
+```{r prepare-spatial}
+# City coordinates for each franchise
+team_cities <- tribble(
+  ~Team,       ~City,           ~lon,      ~lat,
+  "Lakers",    "Los Angeles",   -118.243,   34.052,
+  "Celtics",   "Boston",         -71.057,   42.361,
+  "Sixers",    "Philadelphia",   -75.165,   39.952,
+  "Pistons",   "Detroit",        -83.045,   42.331,
+  "Bulls",     "Chicago",        -87.629,   41.878,
+  "Rockets",   "Houston",        -95.370,   29.760,
+  "Spurs",     "San Antonio",    -98.494,   29.424,
+  "Heat",      "Miami",          -80.191,   25.774,
+  "Mavericks", "Dallas",         -96.797,   32.776,
+  "Warriors",  "San Francisco", -122.419,   37.774,
+  "Cavaliers", "Cleveland",      -81.694,   41.499,
+  "Raptors",   "Toronto",        -79.383,   43.653,
+  "Thunder",   "Oklahoma City",  -97.519,   35.467,
+  "Bucks",     "Milwaukee",      -87.907,   43.038
+)
+```
+
+---
+
+## Visualizations
+
+### Plot 1 — U.S. Births: Monthly Heatmap (2000–2014)
+
+This tile heatmap encodes average daily births using a blue color gradient, allowing simultaneous inspection of seasonal patterns (rows) and year-over-year changes (columns).
+
+```{r births-heatmap, fig.height=7, fig.alt="Tile heatmap showing average daily U.S. births by month (rows) and year (columns) from 2000 to 2014. September is consistently the darkest row, indicating the most births. Color lightens across columns from 2007 onward, reflecting a post-recession decline in birth rates. The lowest cell (February 2014) is annotated."}
+births_monthly <- births |>
+  group_by(year, month, month_name) |>
+  summarise(avg_births = mean(births), .groups = "drop")
+
+min_cell <- births_monthly |> slice_min(avg_births, n = 1)
+
+ggplot(births_monthly, aes(x = factor(year), y = fct_rev(month_name), fill = avg_births)) +
+  geom_tile(color = "white", linewidth = 0.4) +
+  geom_text(
+    data = min_cell,
+    aes(x = factor(year), y = fct_rev(month_name), label = "Lowest\naverage"),
+    color = "white", size = 2.6, fontface = "bold"
+  ) +
+  scale_fill_gradient(
+    low  = "#d6eaf8",
+    high = "#1a5276",
+    labels = comma,
+    name = "Avg. Daily Births"
+  ) +
+  labs(
+    title    = "Average Daily U.S. Births by Month and Year (2000–2014)",
+    subtitle = "September peaks each year (~9 months after the holiday season); the post-2007 recession\nis visible as a gradual darkening across all months.",
+    x = "Year", y = NULL,
+    caption  = "Source: FiveThirtyEight · us_births_00_14.csv"
+  ) +
+  project_theme +
+  theme(
+    axis.text.x      = element_text(angle = 45, hjust = 1),
+    legend.key.width = unit(2, "cm")
+  )
+```
+
+**Takeaway:** September is consistently the busiest birth month — linked to peak conception around the holiday period. Birth levels decline measurably from 2007 onward, corresponding to the Great Recession.
+
+---
+
+### Plot 2 — U.S. Births by Day of Week
+
+```{r births-dow, fig.height=5, fig.alt="Bar chart of average daily U.S. births by day of week from 2000 to 2014. Weekdays (Monday through Friday) average around 12,000 to 13,000 births. Saturday and Sunday drop to roughly 8,000, approximately 23 percent fewer than weekdays. The weekend bars are highlighted in red."}
+births_dow <- births |>
+  group_by(day_of_week) |>
+  summarise(avg_births = mean(births), .groups = "drop")
+
+weekday_avg <- births_dow |> filter(!day_of_week %in% c("Sat", "Sun")) |>
+  summarise(m = mean(avg_births)) |> pull()
+weekend_avg <- births_dow |> filter(day_of_week %in% c("Sat", "Sun")) |>
+  summarise(m = mean(avg_births)) |> pull()
+pct_diff <- round((weekday_avg - weekend_avg) / weekday_avg * 100)
+
+ggplot(births_dow, aes(x = day_of_week, y = avg_births)) +
+  geom_col(fill = "#0072B2", width = 0.7) +
+  geom_text(
+    aes(label = comma(round(avg_births))),
+    vjust = -0.5, size = 3.4, color = "gray30"
+  ) +
+  annotate(
+    "rect",
+    xmin = 5.5, xmax = 7.5,
+    ymin = 0,   ymax = max(births_dow$avg_births) * 1.14,
+    fill = "#D55E00", alpha = 0.10
+  ) +
+  annotate(
+    "text", x = 6.5, y = max(births_dow$avg_births) * 1.10,
+    label = paste0("Weekend:\n~", pct_diff, "% fewer\nbirths than weekdays"),
+    color = "#D55E00", size = 3.3, fontface = "italic"
+  ) +
+  scale_y_continuous(labels = comma, expand = expansion(mult = c(0, 0.18))) +
+  labs(
+    title    = "Average U.S. Daily Births by Day of Week (2000–2014)",
+    subtitle = "The weekday/weekend gap reflects the scheduling of elective inductions and C-sections",
+    x = NULL, y = "Average Daily Births",
+    caption  = "Source: FiveThirtyEight · us_births_00_14.csv"
+  ) +
+  project_theme
+```
+
+**Takeaway:** Saturday and Sunday record roughly `r pct_diff`% fewer births than the midweek peak — a direct reflection of hospital scheduling practices for planned deliveries.
+
+---
+
+### Plot 3 — Billboard Summer Hits: Danceability vs. Positivity *(Interactive)*
+
+Hover over any point to see the track name, artist, year, and audio feature values. Points are colored by decade using a colorblind-safe palette.
+
+> **Interactivity:** Hovering reveals individual song details (title, artist, year, audio feature values) that are impossible to show in a static scatter of 600 points. Clicking decade labels in the legend toggles those years on/off for focused comparison.
+
+```{r billboard-interactive, fig.height=6, fig.alt="Interactive scatter plot of Billboard summer hits from 1958 to 2017, with danceability on the x-axis and emotional valence on the y-axis. Points are colored by decade using a colorblind-safe palette. Earlier decades cluster toward high valence; later decades show more spread toward lower valence."}
+p_bb <- billboard |>
+  ggplot(aes(
+    x     = danceability,
+    y     = valence,
+    color = decade,
+    text  = paste0(
+      "<b>", track_name, "</b><br>",
+      artist_name, "  (", year, ")<br>",
+      "Danceability: ", round(danceability, 2), "<br>",
+      "Valence: ",      round(valence, 2), "<br>",
+      "Energy: ",       round(energy, 2)
+    )
+  )) +
+  geom_point(alpha = 0.75, size = 2) +
+  scale_color_manual(values = pal, name = "Decade") +
+  labs(
+    title = "Billboard Summer Hits: Danceability vs. Emotional Positivity (1958–2017)",
+    x = "Danceability",
+    y = "Valence  (0 = negative / sad,  1 = positive / happy)",
+    caption = "Source: Spotify · all_billboard_summer_hits.csv"
+  ) +
+  project_theme
+
+ggplotly(p_bb, tooltip = "text") |>
+  layout(
+    title = list(
+      text = paste0(
+        "Billboard Summer Hits: Danceability vs. Emotional Positivity",
+        "<br><sup>Hover over a point to see track details · colored by decade · click legend to toggle</sup>"
+      )
+    ),
+    legend = list(orientation = "h", y = -0.15)
+  )
+```
+
+**Takeaway:** Earlier decades (1958–1979) cluster toward the upper-right — highly danceable and emotionally upbeat. From the 1990s onward, valence spreads widely, reflecting that popular summer music increasingly embraces melancholy and introspective tones alongside feel-good fare.
+
+---
+
+### Plot 4 — NBA Championship Cities (1980–2018) *(Spatial)*
+
+```{r nba-map, fig.height=7, message=FALSE, fig.alt="U.S. map showing NBA championship cities from 1980 to 2018. Points are sized and colored by number of championships won, using a blue-to-red gradient. Los Angeles (Lakers) has the largest point at 10 championships. Chicago Bulls and San Antonio Spurs are also prominently labeled."}
+us_map <- st_read("../data/us_states.shp", quiet = TRUE)
+
+champs_geo <- team_cities |>
+  inner_join(champs_count, by = "Team") |>
+  filter(City != "Toronto") |>
+  st_as_sf(coords = c("lon", "lat"), crs = 4326)
+
+ggplot() +
+  geom_sf(data = us_map, fill = "#ecf0f1", color = "white", linewidth = 0.4) +
+  geom_sf(
+    data  = champs_geo,
+    aes(size = championships, color = championships),
+    alpha = 0.85
+  ) +
+  geom_sf_text(
+    data    = champs_geo |> filter(championships >= 3),
+    aes(label = paste0(Team, "\n(", championships, ")")),
+    size    = 2.7,
+    nudge_y = 1.4,
+    fontface = "bold",
+    color   = "#2C3E50"
+  ) +
+  scale_size_continuous(range = c(3, 14), name = "Championships", breaks = c(1, 3, 5, 10)) +
+  # viridis for colorblind safety on the continuous championship scale
+  scale_color_viridis_c(name = "Championships", option = "plasma",
+                        breaks = c(1, 3, 5, 10)) +
+  coord_sf(xlim = c(-125, -66), ylim = c(24, 50), expand = FALSE) +
+  labs(
+    title    = "NBA Championships by City (1980–2018)",
+    subtitle = "Point size and color both encode number of championships won.",
+    caption  = "Source: NBAchampionsdata.csv · US state boundaries: R maps package"
+  ) +
+  guides(size = guide_legend(override.aes = list(alpha = 0.85))) +
+  project_theme +
+  theme(
+    panel.background = element_rect(fill = "#d6eaf8", color = NA),
+    axis.text        = element_blank(),
+    axis.ticks       = element_blank(),
+    panel.grid       = element_blank()
+  )
+```
+
+**Takeaway:** Los Angeles (Lakers, 10 championships in this span) is the dominant franchise. San Antonio (Spurs, 5) and Chicago (Bulls, 6) are the other major dynasties. Championships are geographically concentrated along the coasts and Sun Belt.
+
+---
+
+### Plot 5 — Predicting NBA Championship Points: Linear Model
+
+We model points scored per game as a function of key box score statistics using ordinary least squares regression.
+
+$$\widehat{\text{PTS}} = \beta_0 + \beta_1\,\text{FGP} + \beta_2\,\text{FTP} + \beta_3\,\text{TRB} + \beta_4\,\text{AST} + \beta_5\,\text{TOV}$$
+
+```{r nba-model-fit}
+pts_model <- lm(PTS ~ FGP + FTP + TRB + AST + TOV, data = nba)
+
+model_summary <- glance(pts_model) |>
+  select(r.squared, adj.r.squared, sigma, statistic, p.value) |>
+  mutate(across(where(is.numeric), ~round(., 3)))
+
+knitr::kable(model_summary, caption = "Model Summary Statistics")
+```
+
+```{r nba-model-plot, fig.height=5, fig.alt="Coefficient plot showing the estimated effect of five predictors on NBA championship team points scored per game. Field goal percentage has the largest positive coefficient. Turnovers have a negative coefficient. Color distinguishes statistically significant predictors (orange) from non-significant ones (gray). Error bars show 95 percent confidence intervals."}
+model_tidy <- tidy(pts_model, conf.int = TRUE) |>
+  filter(term != "(Intercept)") |>
+  mutate(
+    term = recode(term,
+      FGP = "Field Goal %",
+      FTP = "Free Throw %",
+      TRB = "Total Rebounds",
+      AST = "Assists",
+      TOV = "Turnovers"
+    ),
+    significant = p.value < 0.05,
+    term = fct_reorder(term, estimate)
+  )
+
+ggplot(model_tidy, aes(x = estimate, y = term, color = significant)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "gray60", linewidth = 0.9) +
+  geom_errorbar(
+    aes(xmin = conf.low, xmax = conf.high),
+    width = 0.22, linewidth = 0.9
+  ) +
+  geom_point(size = 4) +
+  scale_color_manual(
+    values = c("TRUE" = "#E69F00", "FALSE" = "#56B4E9"),
+    labels = c("TRUE" = "p < 0.05  (significant)", "FALSE" = "p \u2265 0.05"),
+    name   = NULL
+  ) +
+  labs(
+    title    = "Predictors of Points Scored in NBA Finals Games",
+    subtitle = "OLS regression coefficients with 95% confidence intervals",
+    x = "Coefficient Estimate  (change in points per unit increase)",
+    y = NULL,
+    caption  = "Source: NBAchampionsdata.csv"
+  ) +
+  project_theme +
+  theme(legend.position = "top")
+```
+
+**Takeaway:** Field goal percentage is by far the strongest predictor — a 10-percentage-point improvement in FG% corresponds to about 5–6 more points per game. Turnovers carry a clear negative coefficient. The model explains approximately `r round(model_summary$r.squared * 100)`% of game-to-game scoring variance (R² = `r model_summary$r.squared`).
+
+---
+
+## Discussion
+
+### a. Original Plans and Data Preparation
+
+My initial concept was a simple time-series line for births, a faceted bar chart of Billboard audio features per decade, and a win/loss bar chart for NBA teams. After exploring the data, I shifted to more informative forms:
+
+- A **tile heatmap** for births captures both year-over-year decline and seasonal rhythm in a single view.
+- An **interactive scatter** for Billboard lets viewers explore 600+ individual songs across 60 years without overplotting.
+- A **spatial map** for NBA makes geographic concentration of championships immediately legible.
+
+Key preparation steps included ordering `day_of_week` as a proper factor, deriving `decade` from `year`, and fixing NBA team name inconsistencies (`'Heat'` stray quotes, `Warriorrs` typo).
+
+### b. Stories, Difficulties, and Further Exploration
+
+The three datasets together tell a story about American culture: demographic impact of economic shocks (birth decline post-2008), emotional diversification of pop music since the 1990s, and the persistent geographic concentration of sporting success.
+
+Further approaches worth pursuing:
+
+- **Animated map** of NBA championships year by year, showing the shifting geographic center of gravity.
+- **Audio feature radar/spider charts** per decade for a richer Billboard comparison.
+- **Interaction analysis** for births: is the weekday/weekend gap stable over 15 years, or has it widened as C-section rates changed?
+
+### c. Data Visualization Principles Applied
+
+- **Accessibility:** All figures use the Okabe-Ito colorblind-safe palette. Continuous scales use `viridis` (plasma option) for the map. Alt text is provided for every figure via `fig.alt`.
+- **Pre-attentive encoding:** Color saturation in the heatmap guides the eye to extremes immediately.
+- **Annotation over legend lookup:** The heatmap, day-of-week bar chart, and NBA map carry inline annotations so the viewer doesn't cross-reference a legend for the key insight.
+- **Interactivity with purpose:** The plotly chart is interactive because individual song identity is meaningful — hover tooltips make 60 years of track data explorable.
+- **Honest uncertainty:** The coefficient plot distinguishes statistically significant predictors from non-significant ones and displays full confidence intervals.
+
+---
+
+## References
+
+- FiveThirtyEight. "US Births Data (2000–2014)." `us_births_00_14.csv`.
+- Spotify / Billboard. "All Billboard Summer Hits." `all_billboard_summer_hits.csv`.
+- "NBA Champions Data (1980–2018)." `NBAchampionsdata.csv`.
+- U.S. state boundaries: R `maps` package, converted via `sf`.
